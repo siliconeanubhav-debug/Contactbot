@@ -12,7 +12,6 @@ API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", 123456789))
 
-# Force Sub Channel (Username like "MyChannel" OR ID like "-100123456789")
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", None)
 
 app = Client("ContactBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -21,7 +20,6 @@ app = Client("ContactBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Users Table
 cursor.execute(
     """
     CREATE TABLE IF NOT EXISTS users (
@@ -31,7 +29,6 @@ cursor.execute(
 """
 )
 
-# Message Mapping Table
 cursor.execute(
     """
     CREATE TABLE IF NOT EXISTS msg_map (
@@ -223,6 +220,29 @@ async def callback_handler(client: Client, callback):
                 show_alert=True,
             )
 
+    # Admin Contact User Button Click Handle
+    elif data.startswith("get_contact_"):
+        target_id = int(data.split("_")[-1])
+        try:
+            target_user = await client.get_users(target_id)
+            user_mention = f"[{target_user.first_name}](tg://user?id={target_id})"
+            username_info = (
+                f"@{target_user.username}"
+                if target_user.username
+                else "No Username"
+            )
+
+            await callback.message.reply_text(
+                f"👤 **User Info Link:**\n\n"
+                f"▪️ **Profile Mention:** {user_mention}\n"
+                f"▪️ **Username:** {username_info}\n"
+                f"▪️ **User ID:** `{target_id}`",
+                disable_web_page_preview=True,
+            )
+            await callback.answer()
+        except Exception as e:
+            await callback.answer(f"Error fetching user: {e}", show_alert=True)
+
 
 # 4. Broadcast Command (Admin Only)
 @app.on_message(
@@ -250,7 +270,7 @@ async def broadcast_handler(client: Client, message: Message):
     )
 
 
-# 5. Forward Message to Admin (With User Profile Button & Auto-Delete)
+# 5. Forward Message to Admin
 @app.on_message(
     filters.private
     & ~filters.user(OWNER_ID)
@@ -266,40 +286,40 @@ async def forward_to_admin(client: Client, message: Message):
         await send_force_sub_message(client, message, lang)
         return
 
-    # यूजर की जानकारी
+    # यूजर की वर्किंग Mention Link बनाना
     user_name = user.first_name + (f" {user.last_name}" if user.last_name else "")
+    user_mention = f"[{user_name}](tg://user?id={user_id})"
     username = f"@{user.username}" if user.username else "No Username"
 
     caption_info = (
         f"📩 **New Message Received!**\n\n"
-        f"👤 **Name:** {user_name}\n"
+        f"👤 **Name:** {user_mention}\n"
         f"🆔 **User ID:** `{user_id}`\n"
         f"🔗 **Username:** {username}\n"
         f"────────────────────"
     )
 
-    # 👤 Contact User Button (Telegram Link via User ID)
-    user_link = f"tg://user?id={user_id}"
+    # Callback Data Button
     contact_button = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("👤 Contact User", url=user_link)]]
+        [[InlineKeyboardButton("👤 Get Profile Link", callback_data=f"get_contact_{user_id}")]]
     )
 
-    # 1. एडमिन को यूजर डिटेल्स मैसेज और बटन भेजें
+    # 1. एडमिन को यूजर डिटेल्स भेजें
     info_msg = await client.send_message(
         chat_id=OWNER_ID, text=caption_info, reply_markup=contact_button
     )
 
-    # 2. यूजर का भेजा गया मैसेज एडमिन को कॉपी करके भेजें
+    # 2. यूजर का मैसेज कॉपी करके एडमिन को भेजें
     fwd_msg = await message.copy(chat_id=OWNER_ID)
 
     # Mapping सेव करें (Reply करने के लिए)
     save_msg_map(info_msg.id, user_id)
     save_msg_map(fwd_msg.id, user_id)
 
-    # 3. यूजर को मैसेज भेजें
+    # 3. यूजर को अलर्ट मैसेज भेजें
     sent_msg = await message.reply_text(TEXTS[lang]["sent"])
 
-    # 4. 30 सेकंड बाद अलर्ट मैसेज डिलीट करें
+    # 4. 30 सेकंड बाद अलर्ट डिलीट करें
     await asyncio.sleep(30)
     try:
         await sent_msg.delete()
@@ -342,7 +362,7 @@ async def start_services():
     await site.start()
 
     await app.start()
-    print("Bot is live with Contact Button feature!")
+    print("Bot is live with Working Mention Links!")
 
 
 if __name__ == "__main__":
