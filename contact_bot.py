@@ -250,7 +250,7 @@ async def broadcast_handler(client: Client, message: Message):
     )
 
 
-# 5. Forward Message to Admin (With User ID Details & Auto-Delete)
+# 5. Forward Message to Admin (With User Profile Button & Auto-Delete)
 @app.on_message(
     filters.private
     & ~filters.user(OWNER_ID)
@@ -266,7 +266,7 @@ async def forward_to_admin(client: Client, message: Message):
         await send_force_sub_message(client, message, lang)
         return
 
-    # यूजर डिटेल्स तैयार करें
+    # यूजर की जानकारी
     user_name = user.first_name + (f" {user.last_name}" if user.last_name else "")
     username = f"@{user.username}" if user.username else "No Username"
 
@@ -278,20 +278,28 @@ async def forward_to_admin(client: Client, message: Message):
         f"────────────────────"
     )
 
-    # 1. एडमिन को यूजर की डिटेल्स भेजें
-    info_msg = await client.send_message(chat_id=OWNER_ID, text=caption_info)
+    # 👤 Contact User Button (Telegram Link via User ID)
+    user_link = f"tg://user?id={user_id}"
+    contact_button = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("👤 Contact User", url=user_link)]]
+    )
 
-    # 2. यूजर का मैसेज कॉपी करके एडमिन को भेजें
+    # 1. एडमिन को यूजर डिटेल्स मैसेज और बटन भेजें
+    info_msg = await client.send_message(
+        chat_id=OWNER_ID, text=caption_info, reply_markup=contact_button
+    )
+
+    # 2. यूजर का भेजा गया मैसेज एडमिन को कॉपी करके भेजें
     fwd_msg = await message.copy(chat_id=OWNER_ID)
 
-    # दोनों में से किसी भी मैसेज पर रिप्लाई करने के लिए Mapping सेव करें
+    # Mapping सेव करें (Reply करने के लिए)
     save_msg_map(info_msg.id, user_id)
     save_msg_map(fwd_msg.id, user_id)
 
-    # 3. यूजर को अलर्ट मैसेज भेजें
+    # 3. यूजर को मैसेज भेजें
     sent_msg = await message.reply_text(TEXTS[lang]["sent"])
 
-    # 4. 30 सेकंड बाद मैसेज डिलीट करें
+    # 4. 30 सेकंड बाद अलर्ट मैसेज डिलीट करें
     await asyncio.sleep(30)
     try:
         await sent_msg.delete()
@@ -334,7 +342,7 @@ async def start_services():
     await site.start()
 
     await app.start()
-    print("Bot is live with User ID info!")
+    print("Bot is live with Contact Button feature!")
 
 
 if __name__ == "__main__":
