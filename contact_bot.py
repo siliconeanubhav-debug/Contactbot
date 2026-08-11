@@ -12,7 +12,6 @@ API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", 123456789))
 
-# Force Sub Channel (Username like "MyChannel" OR ID like "-100123456789")
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", None)
 
 app = Client("ContactBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -20,11 +19,23 @@ app = Client("ContactBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 # ----- DATABASE SETUP -----
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
+
+# 1. Users Table
 cursor.execute(
     """
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         lang TEXT DEFAULT 'en'
+    )
+"""
+)
+
+# 2. Message Mapping Table (For Forward Privacy Bypass)
+cursor.execute(
+    """
+    CREATE TABLE IF NOT EXISTS msg_map (
+        admin_msg_id INTEGER PRIMARY KEY,
+        user_id INTEGER
     )
 """
 )
@@ -57,6 +68,24 @@ def get_all_users():
     return [row[0] for row in cursor.fetchall()]
 
 
+# Save message mapping
+def save_msg_map(admin_msg_id, user_id):
+    cursor.execute(
+        "INSERT OR REPLACE INTO msg_map (admin_msg_id, user_id) VALUES (?, ?)",
+        (admin_msg_id, user_id),
+    )
+    conn.commit()
+
+
+# Get user ID from message mapping
+def get_user_from_map(admin_msg_id):
+    cursor.execute(
+        "SELECT user_id FROM msg_map WHERE admin_msg_id = ?", (admin_msg_id,)
+    )
+    res = cursor.fetchone()
+    return res[0] if res else None
+
+
 # ----- TEXT DICTIONARY -----
 TEXTS = {
     "hi": {
@@ -65,7 +94,7 @@ TEXTS = {
         "lang_set": "✅ **भाषा बदलकर 'हिंदी' कर दी गई है!**",
         "sent": "✅ **आपका संदेश एडमिन को भेज दिया गया है!**",
         "replied": "✅ **जवाब सफलतापूर्वक भेज दिया गया!**",
-        "err_reply": "⚠️ **त्रुटि:** कृपया यूजर के फॉरवर्ड किए गए मैसेज पर ही 'Reply' करें।",
+        "err_reply": "⚠️ **त्रुटि:** यह मैसेज किसी यूजर से लिंक नहीं है।",
         "fsub_msg": "⚠️ **आपको बोट का उपयोग करने के लिए हमारे अपडेट चैनल को जॉइन करना होगा।**\n\nकृपया नीचे दिए गए बटन पर क्लिक करके चैनल जॉइन करें और फिर **Try Again** पर क्लिक करें।",
     },
     "en": {
@@ -74,7 +103,7 @@ TEXTS = {
         "lang_set": "✅ **Language set to 'English'!**",
         "sent": "✅ **Your message has been sent to the admin!**",
         "replied": "✅ **Reply sent successfully!**",
-        "err_reply": "⚠️ **Error:** Please 'Reply' directly to the forwarded user message.",
+        "err_reply": "⚠️ **Error:** Could not find the user associated with this message.",
         "fsub_msg": "⚠️ **You must join our Updates Channel to use this bot.**\n\nPlease join using the button below, then click **Try Again**.",
     },
 }
@@ -83,7 +112,7 @@ TEXTS = {
 # ----- HELPER FUNCTION: FORCE SUB CHECK -----
 async def check_force_sub(client: Client, user_id: int):
     if not FORCE_SUB_CHANNEL:
-        return True  # If Force Sub is disabled
+        return True
 
     try:
         chat_identifier = (
@@ -99,7 +128,7 @@ async def check_force_sub(client: Client, user_id: int):
         return False
     except Exception as e:
         print(f"Force Sub Error: {e}")
-        return True  # Bypass if channel not found or bot lacks permission
+        return True
 
 
 async def send_force_sub_message(client: Client, message, lang: str):
@@ -134,7 +163,6 @@ async def start_handler(client: Client, message: Message):
     add_user(user_id)
     lang = get_user_lang(user_id)
 
-    # Force Sub Check
     if not await check_force_sub(client, user_id):
         await send_force_sub_message(client, message, lang)
         return
@@ -172,12 +200,11 @@ async def language_command(client: Client, message: Message):
     await message.reply_text(TEXTS[lang]["lang_select"], reply_markup=buttons)
 
 
-# 3. Callback Queries (Language & Force Sub Check)
+# 3. Callback Queries
 @app.on_callback_query()
 async def callback_handler(client: Client, callback):
     data = callback.data
     user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
 
     if data.startswith("set_lang_"):
         lang_code = data.split("_")[-1]
@@ -224,7 +251,7 @@ async def broadcast_handler(client: Client, message: Message):
     )
 
 
-# 5. Forward Message to Admin
+# 5. Forward Message to Admin & Save Mapping
 @app.on_message(
     filters.private
     & ~filters.user(OWNER_ID)
@@ -235,25 +262,41 @@ async def forward_to_admin(client: Client, message: Message):
     add_user(user_id)
     lang = get_user_lang(user_id)
 
-    # Force Sub Check
     if not await check_force_sub(client, user_id):
         await send_force_sub_message(client, message, lang)
         return
 
-    await message.forward(chat_id=OWNER_ID)
+    # एडमिन को मैसेज फॉरवर्ड करें
+    fwd_msg = await message.forward(chat_id=OWNER_ID)
+
+    # एडमिन के मैसेज ID और यूजर की Telegram ID को डेटाबेस में सेव करें
+    save_msg_map(fwd_msg.id, user_id)
+
     await message.reply_text(TEXTS[lang]["sent"])
 
 
-# 6. Admin Reply to User
+# 6. Admin Reply to User (Works with Forward Privacy Enabled)
 @app.on_message(filters.private & filters.user(OWNER_ID) & filters.reply)
 async def reply_to_user(client: Client, message: Message):
     if message.reply_to_message.text and message.reply_to_message.text.startswith("📢"):
         return
 
+    replied_msg_id = message.reply_to_message.id
+    target_user_id = None
+
+    # 1. पहले Pyrogram का forward_from चेक करें
     if message.reply_to_message.forward_from:
         target_user_id = message.reply_to_message.forward_from.id
-        await message.copy(chat_id=target_user_id)
-        await message.reply_text(TEXTS["en"]["replied"])
+    else:
+        # 2. अगर Forward Privacy On है, तो डेटाबेस मैपिंग से User ID निकालें
+        target_user_id = get_user_from_map(replied_msg_id)
+
+    if target_user_id:
+        try:
+            await message.copy(chat_id=target_user_id)
+            await message.reply_text(TEXTS["en"]["replied"])
+        except Exception as e:
+            await message.reply_text(f"❌ **मैसेज भेजने में विफल:** `{e}`")
     else:
         await message.reply_text(TEXTS["en"]["err_reply"])
 
@@ -269,7 +312,7 @@ async def start_services():
     await site.start()
 
     await app.start()
-    print("Bot is live with Force Sub, Multi-Language & Broadcast Features!")
+    print("Bot is live with Privacy Bypass Mapping!")
 
 
 if __name__ == "__main__":
