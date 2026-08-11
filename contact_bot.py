@@ -12,6 +12,7 @@ API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", 123456789))
 
+# Force Sub Channel (Username like "MyChannel" OR ID like "-100123456789")
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", None)
 
 app = Client("ContactBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -20,7 +21,7 @@ app = Client("ContactBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# 1. Users Table
+# Users Table
 cursor.execute(
     """
     CREATE TABLE IF NOT EXISTS users (
@@ -30,7 +31,7 @@ cursor.execute(
 """
 )
 
-# 2. Message Mapping Table (For Forward Privacy Bypass)
+# Message Mapping Table
 cursor.execute(
     """
     CREATE TABLE IF NOT EXISTS msg_map (
@@ -68,7 +69,6 @@ def get_all_users():
     return [row[0] for row in cursor.fetchall()]
 
 
-# Save message mapping
 def save_msg_map(admin_msg_id, user_id):
     cursor.execute(
         "INSERT OR REPLACE INTO msg_map (admin_msg_id, user_id) VALUES (?, ?)",
@@ -77,7 +77,6 @@ def save_msg_map(admin_msg_id, user_id):
     conn.commit()
 
 
-# Get user ID from message mapping
 def get_user_from_map(admin_msg_id):
     cursor.execute(
         "SELECT user_id FROM msg_map WHERE admin_msg_id = ?", (admin_msg_id,)
@@ -251,14 +250,15 @@ async def broadcast_handler(client: Client, message: Message):
     )
 
 
-# 5. Forward Message to Admin & Save Mapping
+# 5. Forward Message to Admin (With User ID Details & Auto-Delete)
 @app.on_message(
     filters.private
     & ~filters.user(OWNER_ID)
     & ~filters.command(["start", "language"])
 )
 async def forward_to_admin(client: Client, message: Message):
-    user_id = message.from_user.id
+    user = message.from_user
+    user_id = user.id
     add_user(user_id)
     lang = get_user_lang(user_id)
 
@@ -266,16 +266,40 @@ async def forward_to_admin(client: Client, message: Message):
         await send_force_sub_message(client, message, lang)
         return
 
-    # एडमिन को मैसेज फॉरवर्ड करें
-    fwd_msg = await message.forward(chat_id=OWNER_ID)
+    # यूजर डिटेल्स तैयार करें
+    user_name = user.first_name + (f" {user.last_name}" if user.last_name else "")
+    username = f"@{user.username}" if user.username else "No Username"
 
-    # एडमिन के मैसेज ID और यूजर की Telegram ID को डेटाबेस में सेव करें
+    caption_info = (
+        f"📩 **New Message Received!**\n\n"
+        f"👤 **Name:** {user_name}\n"
+        f"🆔 **User ID:** `{user_id}`\n"
+        f"🔗 **Username:** {username}\n"
+        f"────────────────────"
+    )
+
+    # 1. एडमिन को यूजर की डिटेल्स भेजें
+    info_msg = await client.send_message(chat_id=OWNER_ID, text=caption_info)
+
+    # 2. यूजर का मैसेज कॉपी करके एडमिन को भेजें
+    fwd_msg = await message.copy(chat_id=OWNER_ID)
+
+    # दोनों में से किसी भी मैसेज पर रिप्लाई करने के लिए Mapping सेव करें
+    save_msg_map(info_msg.id, user_id)
     save_msg_map(fwd_msg.id, user_id)
 
-    await message.reply_text(TEXTS[lang]["sent"])
+    # 3. यूजर को अलर्ट मैसेज भेजें
+    sent_msg = await message.reply_text(TEXTS[lang]["sent"])
+
+    # 4. 30 सेकंड बाद मैसेज डिलीट करें
+    await asyncio.sleep(30)
+    try:
+        await sent_msg.delete()
+    except Exception:
+        pass
 
 
-# 6. Admin Reply to User (Works with Forward Privacy Enabled)
+# 6. Admin Reply Handler
 @app.on_message(filters.private & filters.user(OWNER_ID) & filters.reply)
 async def reply_to_user(client: Client, message: Message):
     if message.reply_to_message.text and message.reply_to_message.text.startswith("📢"):
@@ -284,11 +308,9 @@ async def reply_to_user(client: Client, message: Message):
     replied_msg_id = message.reply_to_message.id
     target_user_id = None
 
-    # 1. पहले Pyrogram का forward_from चेक करें
     if message.reply_to_message.forward_from:
         target_user_id = message.reply_to_message.forward_from.id
     else:
-        # 2. अगर Forward Privacy On है, तो डेटाबेस मैपिंग से User ID निकालें
         target_user_id = get_user_from_map(replied_msg_id)
 
     if target_user_id:
@@ -312,7 +334,7 @@ async def start_services():
     await site.start()
 
     await app.start()
-    print("Bot is live with Privacy Bypass Mapping!")
+    print("Bot is live with User ID info!")
 
 
 if __name__ == "__main__":
