@@ -220,29 +220,6 @@ async def callback_handler(client: Client, callback):
                 show_alert=True,
             )
 
-    # Admin Contact User Button Click Handle
-    elif data.startswith("get_contact_"):
-        target_id = int(data.split("_")[-1])
-        try:
-            target_user = await client.get_users(target_id)
-            user_mention = f"[{target_user.first_name}](tg://user?id={target_id})"
-            username_info = (
-                f"@{target_user.username}"
-                if target_user.username
-                else "No Username"
-            )
-
-            await callback.message.reply_text(
-                f"👤 **User Info Link:**\n\n"
-                f"▪️ **Profile Mention:** {user_mention}\n"
-                f"▪️ **Username:** {username_info}\n"
-                f"▪️ **User ID:** `{target_id}`",
-                disable_web_page_preview=True,
-            )
-            await callback.answer()
-        except Exception as e:
-            await callback.answer(f"Error fetching user: {e}", show_alert=True)
-
 
 # 4. Broadcast Command (Admin Only)
 @app.on_message(
@@ -270,7 +247,7 @@ async def broadcast_handler(client: Client, message: Message):
     )
 
 
-# 5. Forward Message to Admin
+# 5. Forward Message to Admin (Exact Format like Image)
 @app.on_message(
     filters.private
     & ~filters.user(OWNER_ID)
@@ -286,37 +263,36 @@ async def forward_to_admin(client: Client, message: Message):
         await send_force_sub_message(client, message, lang)
         return
 
-    # यूजर की वर्किंग Mention Link बनाना
+    # 1. यूजर का मैसेज एडमिन को फॉरवर्ड करें
+    fwd_msg = await message.forward(chat_id=OWNER_ID)
+
+    # नाम और यूजर लिंक फॉर्मेट करना
     user_name = user.first_name + (f" {user.last_name}" if user.last_name else "")
-    user_mention = f"[{user_name}](tg://user?id={user_id})"
-    username = f"@{user.username}" if user.username else "No Username"
+    user_link = f"[{user_name}](tg://user?id={user_id})"
 
-    caption_info = (
-        f"📩 **New Message Received!**\n\n"
-        f"👤 **Name:** {user_mention}\n"
-        f"🆔 **User ID:** `{user_id}`\n"
-        f"🔗 **Username:** {username}\n"
-        f"────────────────────"
+    # इमेज जैसा सेम फॉर्मेटेड मैसेज तैयार करना
+    info_text = (
+        f"👇 Message sent by {user_link} [{user_id}] #id{user_id}\n"
+        f"👉 _To answer, reply to this message._"
     )
 
-    # Callback Data Button
-    contact_button = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("👤 Get Profile Link", callback_data=f"get_contact_{user_id}")]]
+    # प्रोफाइल खोलने के लिए बटन
+    profile_button = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("👤 User profile", url=f"tg://user?id={user_id}")]]
     )
 
-    # 1. एडमिन को यूजर डिटेल्स भेजें
-    info_msg = await client.send_message(
-        chat_id=OWNER_ID, text=caption_info, reply_markup=contact_button
+    # 2. फॉरवर्ड मैसेज का रिप्लाई बनाकर एडमिन को भेजें
+    reply_info_msg = await fwd_msg.reply_text(
+        text=info_text,
+        reply_markup=profile_button,
+        disable_web_page_preview=True,
     )
 
-    # 2. यूजर का मैसेज कॉपी करके एडमिन को भेजें
-    fwd_msg = await message.copy(chat_id=OWNER_ID)
-
-    # Mapping सेव करें (Reply करने के लिए)
-    save_msg_map(info_msg.id, user_id)
+    # रिप्लाई मैपिंग सेव करें
     save_msg_map(fwd_msg.id, user_id)
+    save_msg_map(reply_info_msg.id, user_id)
 
-    # 3. यूजर को अलर्ट मैसेज भेजें
+    # 3. यूजर को मैसेज भेजें
     sent_msg = await message.reply_text(TEXTS[lang]["sent"])
 
     # 4. 30 सेकंड बाद अलर्ट डिलीट करें
@@ -362,7 +338,7 @@ async def start_services():
     await site.start()
 
     await app.start()
-    print("Bot is live with Working Mention Links!")
+    print("Bot is live with Image style Forward Layout!")
 
 
 if __name__ == "__main__":
